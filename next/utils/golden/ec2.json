@@ -66,6 +66,45 @@
         ]
     },
     {
+        "name": "NUMA Architecture",
+        "slug": "numa",
+        "rows": [
+            {
+                "name": "Uses NUMA Architecture",
+                "children": "N/A",
+                "help": "https://en.wikipedia.org/wiki/Non-uniform_memory_access"
+            },
+            {
+                "name": "NUMA Node Count",
+                "children": "N/A"
+            },
+            {
+                "name": "Max NUMA Distance",
+                "children": "N/A"
+            },
+            {
+                "name": "Cores per NUMA Node (Avg)",
+                "children": "N/A"
+            },
+            {
+                "name": "Threads per NUMA Node (Avg)",
+                "children": "N/A"
+            },
+            {
+                "name": "Memory per NUMA Node (Avg MB)",
+                "children": "N/A"
+            },
+            {
+                "name": "L3 Cache per NUMA Node (Avg MB)",
+                "children": "N/A"
+            },
+            {
+                "name": "L3 Cache Shared",
+                "children": "N/A"
+            }
+        ]
+    },
+    {
         "name": "Networking",
         "slug": "networking",
         "rows": [

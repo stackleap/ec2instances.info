@@ -28,7 +28,8 @@ func loadAwsUrlJson(baseUrl string, awsUrl string, val any) error {
 
 type AwsRootIndexResponse struct {
 	Offers map[string]struct {
-		CurrentRegionIndexUrl string `json:"currentRegionIndexUrl"`
+		CurrentSavingsPlanIndexUrl string `json:"currentSavingsPlanIndexUrl"`
+		CurrentRegionIndexUrl      string `json:"currentRegionIndexUrl"`
 	} `json:"offers"`
 }
 
@@ -40,8 +41,8 @@ type AwsRegionIndexResponse struct {
 
 type service struct {
 	serviceName  string
-	globalInData chan *awsutils.RawRegion
-	chinaInData  chan *awsutils.RawRegion
+	globalInData chan awsutils.RawRegion
+	chinaInData  chan awsutils.RawRegion
 }
 
 type flatData struct {
@@ -51,10 +52,27 @@ type flatData struct {
 
 func loadAllRegionsForServices(services []service, globalRootIndex, chinaRootIndex AwsRootIndexResponse) {
 	// Global
+	chinaToUrlToSavingsPlan := make(map[bool]map[string]func() map[string]map[string]map[string]float64)
 	for _, service := range services {
 		region, ok := globalRootIndex.Offers[service.serviceName]
 		if !ok {
 			log.Fatalf("Service %s not found in global root index", service.serviceName)
+		}
+
+		handler := func() map[string]map[string]map[string]float64 {
+			return nil
+		}
+		urls, ok := chinaToUrlToSavingsPlan[false]
+		if !ok {
+			urls = make(map[string]func() map[string]map[string]map[string]float64)
+			chinaToUrlToSavingsPlan[false] = urls
+		}
+		url := region.CurrentSavingsPlanIndexUrl
+		if h, ok := urls[url]; ok {
+			handler = h
+		} else if url != "" {
+			handler = awsutils.GetSavingsPlans(AWS_NON_CHINA_ROOT_URL, url, false)
+			urls[url] = handler
 		}
 
 		go func() {
@@ -85,7 +103,7 @@ func loadAllRegionsForServices(services []service, globalRootIndex, chinaRootInd
 						if err := loadAwsUrlJson(AWS_NON_CHINA_ROOT_URL, r.currentVersionUrl, &j); err != nil {
 							log.Fatal(err)
 						}
-						service.globalInData <- &awsutils.RawRegion{
+						service.globalInData <- awsutils.RawRegion{
 							RegionName: r.regionName,
 							RegionData: j,
 						}
@@ -94,7 +112,9 @@ func loadAllRegionsForServices(services []service, globalRootIndex, chinaRootInd
 				fg.Run()
 				runtime.GC()
 			}
-			service.globalInData <- nil
+			service.globalInData <- awsutils.RawRegion{
+				SavingsPlanData: handler,
+			}
 		}()
 	}
 
@@ -103,6 +123,22 @@ func loadAllRegionsForServices(services []service, globalRootIndex, chinaRootInd
 		region, ok := chinaRootIndex.Offers[service.serviceName]
 		if !ok {
 			log.Fatalf("Service %s not found in china root index", service.serviceName)
+		}
+
+		handler := func() map[string]map[string]map[string]float64 {
+			return nil
+		}
+		urls, ok := chinaToUrlToSavingsPlan[true]
+		if !ok {
+			urls = make(map[string]func() map[string]map[string]map[string]float64)
+			chinaToUrlToSavingsPlan[true] = urls
+		}
+		url := region.CurrentSavingsPlanIndexUrl
+		if h, ok := urls[url]; ok {
+			handler = h
+		} else if url != "" {
+			handler = awsutils.GetSavingsPlans(AWS_CHINA_ROOT_URL, url, true)
+			urls[url] = handler
 		}
 
 		go func() {
@@ -132,7 +168,7 @@ func loadAllRegionsForServices(services []service, globalRootIndex, chinaRootInd
 						if err := loadAwsUrlJson(AWS_CHINA_ROOT_URL, r.currentVersionUrl, &j); err != nil {
 							log.Fatal(err)
 						}
-						service.chinaInData <- &awsutils.RawRegion{
+						service.chinaInData <- awsutils.RawRegion{
 							RegionName: r.regionName,
 							RegionData: j,
 						}
@@ -141,7 +177,9 @@ func loadAllRegionsForServices(services []service, globalRootIndex, chinaRootInd
 				fg.Run()
 				runtime.GC()
 			}
-			service.chinaInData <- nil
+			service.chinaInData <- awsutils.RawRegion{
+				SavingsPlanData: handler,
+			}
 		}()
 	}
 }
@@ -182,13 +220,13 @@ func DoAwsScraping() {
 		}
 		rootIndexChannel <- rootIndex
 	}()
-	chinaRootIndexChannel := make(chan AwsRootIndexResponse)
+	chinaIndexChannel := make(chan AwsRootIndexResponse)
 	go func() {
-		var rootIndex AwsRootIndexResponse
-		if err := loadAwsUrlJson(AWS_CHINA_ROOT_URL, "/offers/v1.0/cn/index.json", &rootIndex); err != nil {
+		var chinaIndex AwsRootIndexResponse
+		if err := loadAwsUrlJson(AWS_CHINA_ROOT_URL, "/offers/v1.0/cn/index.json", &chinaIndex); err != nil {
 			log.Fatal(err)
 		}
-		chinaRootIndexChannel <- rootIndex
+		chinaIndexChannel <- chinaIndex
 	}()
 
 	var fg utils.FunctionGroup
@@ -200,8 +238,8 @@ func DoAwsScraping() {
 	ec2GlobalChannel, ec2ChinaChannel := ec2Internal.Setup(&fg, ec2ApiResponses)
 
 	// Defines the channel for the RDS data
-	rdsGlobalChannel := make(chan *awsutils.RawRegion)
-	rdsChinaChannel := make(chan *awsutils.RawRegion)
+	rdsGlobalChannel := make(chan awsutils.RawRegion)
+	rdsChinaChannel := make(chan awsutils.RawRegion)
 	fg.Add(func() {
 		processRDSData(rdsChinaChannel, ec2ApiResponses, true)
 	})
@@ -213,8 +251,8 @@ func DoAwsScraping() {
 	cacheParamsGetter := utils.BlockUntilDone(getElastiCacheCacheParameters)
 
 	// Defines the channel for the ElastiCache data
-	elastiCacheGlobalChannel := make(chan *awsutils.RawRegion)
-	elastiCacheChinaChannel := make(chan *awsutils.RawRegion)
+	elastiCacheGlobalChannel := make(chan awsutils.RawRegion)
+	elastiCacheChinaChannel := make(chan awsutils.RawRegion)
 	fg.Add(func() {
 		processElastiCacheData(elastiCacheChinaChannel, true, cacheParamsGetter)
 	})
@@ -226,8 +264,8 @@ func DoAwsScraping() {
 	redshiftNodeParametersGetter := utils.BlockUntilDone(getRedshiftNodeParameters)
 
 	// Defines the channel for the Redshift data
-	redshiftGlobalChannel := make(chan *awsutils.RawRegion)
-	redshiftChinaChannel := make(chan *awsutils.RawRegion)
+	redshiftGlobalChannel := make(chan awsutils.RawRegion)
+	redshiftChinaChannel := make(chan awsutils.RawRegion)
 	fg.Add(func() {
 		processRedshiftData(redshiftChinaChannel, true, redshiftNodeParametersGetter)
 	})
@@ -239,8 +277,8 @@ func DoAwsScraping() {
 	volumeQuotasGetter := utils.BlockUntilDone(getOpenSearchVolumeQuotas)
 
 	// Defines the channel for the OpenSearch data
-	openSearchGlobalChannel := make(chan *awsutils.RawRegion)
-	openSearchChinaChannel := make(chan *awsutils.RawRegion)
+	openSearchGlobalChannel := make(chan awsutils.RawRegion)
+	openSearchChinaChannel := make(chan awsutils.RawRegion)
 	fg.Add(func() {
 		processOpenSearchData(openSearchChinaChannel, true, volumeQuotasGetter)
 	})
@@ -275,7 +313,7 @@ func DoAwsScraping() {
 			globalInData: openSearchGlobalChannel,
 			chinaInData:  openSearchChinaChannel,
 		},
-	}, <-rootIndexChannel, <-chinaRootIndexChannel)
+	}, <-rootIndexChannel, <-chinaIndexChannel)
 
 	// Wait for all the data to be processed
 	fg.Run()

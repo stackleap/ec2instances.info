@@ -87,6 +87,63 @@ export function ec2(instance: Omit<EC2Instance, "pricing">): Table[] {
             ],
         },
         {
+            name: "NUMA Architecture",
+            slug: "numa",
+            rows: [
+                {
+                    name: "Uses NUMA Architecture",
+                    children:
+                        typeof instance.uses_numa_architecture !== "boolean"
+                            ? "N/A"
+                            : instance.uses_numa_architecture
+                              ? "Yes"
+                              : "No",
+                    help: "https://en.wikipedia.org/wiki/Non-uniform_memory_access",
+                },
+                {
+                    name: "NUMA Node Count",
+                    children: instance.numa_node_count ?? "N/A",
+                },
+                {
+                    name: "Max NUMA Distance",
+                    children: instance.max_numa_distance ?? "N/A",
+                },
+                {
+                    name: "Cores per NUMA Node (Avg)",
+                    children: instance.core_count_per_numa_node
+                        ? instance.core_count_per_numa_node.toFixed(1)
+                        : "N/A",
+                },
+                {
+                    name: "Threads per NUMA Node (Avg)",
+                    children: instance.thread_count_per_numa_node
+                        ? instance.thread_count_per_numa_node.toFixed(1)
+                        : "N/A",
+                },
+                {
+                    name: "Memory per NUMA Node (Avg MB)",
+                    children: instance.memory_per_numa_node_mb
+                        ? `${instance.memory_per_numa_node_mb.toFixed(0)} MB`
+                        : "N/A",
+                },
+                {
+                    name: "L3 Cache per NUMA Node (Avg MB)",
+                    children: instance.l3_per_numa_node_mb
+                        ? `${instance.l3_per_numa_node_mb.toFixed(1)} MB`
+                        : "N/A",
+                },
+                {
+                    name: "L3 Cache Shared",
+                    children:
+                        typeof instance.l3_shared !== "boolean"
+                            ? "N/A"
+                            : instance.l3_shared
+                              ? "Yes"
+                              : "No",
+                },
+            ],
+        },
+        {
             name: "Networking",
             slug: "networking",
             rows: [

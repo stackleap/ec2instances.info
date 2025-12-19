@@ -11,14 +11,14 @@ import (
 func Setup(
 	fg *utils.FunctionGroup,
 	ec2ApiResponses *utils.SlowBuildingMap[string, *types.InstanceTypeInfo],
-) (chan *awsutils.RawRegion, chan *awsutils.RawRegion) {
+) (chan awsutils.RawRegion, chan awsutils.RawRegion) {
 	// Start all the data getters in the background
 	spotDataPartialGetter := utils.BlockUntilDone(getSpotDataPartial)
 	t2HtmlGetter := utils.BlockUntilDone(getT2Html)
 
 	// Spawn the EC2 data processing threads
-	ec2GlobalChannel := make(chan *awsutils.RawRegion)
-	ec2ChinaChannel := make(chan *awsutils.RawRegion)
+	ec2GlobalChannel := make(chan awsutils.RawRegion)
+	ec2ChinaChannel := make(chan awsutils.RawRegion)
 	getters := ec2DataGetters{
 		spotDataPartialGetter: spotDataPartialGetter,
 		t2HtmlGetter:          t2HtmlGetter,

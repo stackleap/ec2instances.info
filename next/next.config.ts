@@ -6,6 +6,10 @@ let nextConfig: NextConfig = {
     typescript: {
         ignoreBuildErrors: true,
     },
+    turbopack: {
+        root: __dirname,
+    },
+    productionBrowserSourceMaps: true,
 };
 
 if (process.env.NEXT_PUBLIC_SENTRY_DSN) {

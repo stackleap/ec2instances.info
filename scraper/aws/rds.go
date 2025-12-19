@@ -4,6 +4,7 @@ import (
 	"log"
 	"scraper/aws/awsutils"
 	"scraper/utils"
+	"slices"
 	"sort"
 	"strings"
 
@@ -43,6 +44,10 @@ var IGNORE_RDS_ATTRIBUTES = map[string]bool{
 	"usagetype":        true,
 }
 
+var pipeIntoAverager = []string{
+	"vcpu",
+}
+
 func enrichRdsInstance(
 	instance map[string]any,
 	attributes map[string]string,
@@ -56,7 +61,16 @@ func enrichRdsInstance(
 	// Copy them into the instance
 	for k, v := range attributes {
 		if _, ok := IGNORE_RDS_ATTRIBUTES[k]; !ok && v != "NA" {
-			instance[k] = v
+			if slices.Contains(pipeIntoAverager, k) {
+				avg, ok := instance[k].(*awsutils.Averager[string])
+				if !ok {
+					avg = &awsutils.Averager[string]{}
+				}
+				*avg = append(*avg, v)
+				instance[k] = avg
+			} else {
+				instance[k] = v
+			}
 		}
 	}
 
@@ -223,7 +237,11 @@ func getgenericAwsPricingData(instance map[string]any, regionName, platform stri
 	return osMap.(*genericAwsPricingData)
 }
 
-func processRDSData(inData chan *awsutils.RawRegion, ec2ApiResponses *utils.SlowBuildingMap[string, *types.InstanceTypeInfo], china bool) {
+func processRDSData(
+	inData chan awsutils.RawRegion,
+	ec2ApiResponses *utils.SlowBuildingMap[string, *types.InstanceTypeInfo],
+	china bool,
+) {
 	// Defines the currency
 	currency := "USD"
 	if china {
@@ -237,9 +255,11 @@ func processRDSData(inData chan *awsutils.RawRegion, ec2ApiResponses *utils.Slow
 	// The descriptions found for each region
 	regionDescriptions := make(map[string]string)
 
+	var savingsPlan func() map[string]map[string]map[string]float64
 	for rawRegion := range inData {
 		// Close the channel when we're done
-		if rawRegion == nil {
+		if rawRegion.SavingsPlanData != nil {
+			savingsPlan = rawRegion.SavingsPlanData
 			close(inData)
 			break
 		}
@@ -343,6 +363,28 @@ func processRDSData(inData chan *awsutils.RawRegion, ec2ApiResponses *utils.Slow
 			log.Fatalln("RDS Region description missing for", rawRegion.RegionName)
 		} else {
 			regionDescriptions[rawRegion.RegionName] = regionDescription
+		}
+	}
+
+	// Add savings plans pricing
+	for region, skuMap := range savingsPlan() {
+		for sku, termMap := range skuMap {
+			skuInfo, ok := sku2SkuData[sku]
+			if !ok {
+				continue
+			}
+			for term, price := range termMap {
+				data := []*genericAwsPricingData{
+					getgenericAwsPricingData(skuInfo.instance, region, skuInfo.attributes["databaseEngine"]),
+					getgenericAwsPricingData(skuInfo.instance, region, skuInfo.attributes["engineCode"]),
+				}
+				for _, pricingData := range data {
+					if pricingData.Reserved == nil {
+						pricingData.Reserved = map[string]float64{}
+					}
+					pricingData.Reserved[term] = price
+				}
+			}
 		}
 	}
 

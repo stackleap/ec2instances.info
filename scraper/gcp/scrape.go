@@ -2,7 +2,6 @@ package gcp
 
 import (
 	"log"
-	"os"
 	"scraper/utils"
 	"sort"
 	"strconv"
@@ -10,7 +9,7 @@ import (
 )
 
 // Process SKUs and pricing data to generate GCP instances
-func processGCPData(skus []SKU, pricing map[string]PriceInfo) map[string]*GCPInstance {
+func processGCPData(skus []SKU, pricing map[string]PriceInfo, machineSpecs map[string]*MachineSpecs, regions map[string]string) map[string]*GCPInstance {
 	instances := make(map[string]*GCPInstance)
 
 	// Group SKUs by machine type and region
@@ -121,27 +120,62 @@ func processGCPData(skus []SKU, pricing map[string]PriceInfo) map[string]*GCPIns
 		}
 
 		skuData[key] = price
+
+		// If this is a multi-regional SKU, expand it to actual regions immediately
+		if strings.HasPrefix(region, "multi-") {
+			var targetRegions []string
+			switch region {
+			case "multi-americas":
+				targetRegions = []string{"us-central1", "us-east1", "us-east4", "us-east5", "us-south1", "us-west1", "us-west2", "us-west3", "us-west4", "northamerica-northeast1", "northamerica-northeast2", "southamerica-east1", "southamerica-west1"}
+			case "multi-europe":
+				targetRegions = []string{"europe-west1", "europe-west2", "europe-west3", "europe-west4", "europe-west6", "europe-west8", "europe-west9", "europe-north1", "europe-central2", "europe-southwest1"}
+			case "multi-asia":
+				targetRegions = []string{"asia-east1", "asia-east2", "asia-northeast1", "asia-northeast2", "asia-northeast3", "asia-south1", "asia-south2", "asia-southeast1", "asia-southeast2", "australia-southeast1", "australia-southeast2"}
+			}
+
+			// Copy the price to all target regions
+			for _, targetRegion := range targetRegions {
+				regionalKey := skuKey{
+					machineType:  machineFamily,
+					region:       targetRegion,
+					isSpot:       isSpot,
+					isWindows:    isWindows,
+					resourceType: resourceType,
+				}
+				// Only add if not already present (regional pricing takes precedence)
+				if _, exists := skuData[regionalKey]; !exists {
+					skuData[regionalKey] = price
+				}
+			}
+		}
 	}
 
 	// Build instances from machine specs
 	matchedInstances := 0
-	for instanceType, specs := range gcpMachineSpecs {
+	for instanceType, specs := range machineSpecs {
+		// Determine GPU model pointer
+		var gpuModel *string
+		if specs.GPUModel != "" {
+			gpuModel = &specs.GPUModel
+		}
+
 		instance := &GCPInstance{
 			InstanceType:       instanceType,
-			Family:             specs.family,
-			VCPU:               specs.vcpu,
-			Memory:             specs.memory,
+			Family:             specs.Family,
+			VCPU:               specs.VCPU,
+			Memory:             specs.MemoryGB,
 			PrettyName:         createPrettyName(instanceType),
 			NetworkPerformance: "Variable",
 			Generation:         "current",
-			GPU:                0,
+			GPU:                float64(specs.GPU),
+			GPUModel:           gpuModel,
 			Pricing:            make(map[Region]map[OS]any),
 			Regions:            make(map[string]string),
 			AvailabilityZones:  make(map[string][]string),
 			LocalSSD:           false,
-			SharedCPU:          strings.HasPrefix(instanceType, "e2-") || strings.HasPrefix(instanceType, "f1-") || strings.HasPrefix(instanceType, "g1-"),
-			ComputeOptimized:   strings.Contains(specs.family, "Compute optimized"),
-			MemoryOptimized:    strings.Contains(specs.family, "Memory optimized"),
+			SharedCPU:          specs.IsSharedCPU,
+			ComputeOptimized:   strings.Contains(specs.Family, "Compute optimized"),
+			MemoryOptimized:    strings.Contains(specs.Family, "Memory optimized"),
 		}
 
 		// Add pricing data for each region
@@ -195,7 +229,7 @@ func processGCPData(skus []SKU, pricing map[string]PriceInfo) map[string]*GCPIns
 			}
 
 			// Total price = (vCPUs * core price) + (memory GB * RAM price)
-			totalPrice := (float64(specs.vcpu) * pricing.corePrice) + (specs.memory * pricing.ramPrice)
+			totalPrice := (float64(specs.VCPU) * pricing.corePrice) + (specs.MemoryGB * pricing.ramPrice)
 
 			if totalPrice == 0 {
 				continue
@@ -229,7 +263,12 @@ func processGCPData(skus []SKU, pricing map[string]PriceInfo) map[string]*GCPIns
 			}
 
 			// Add region to the regions map
-			instance.Regions[rk.region] = getRegionDisplayName(rk.region)
+			if displayName, ok := regions[rk.region]; ok {
+				instance.Regions[rk.region] = displayName
+			} else {
+				// Fallback to friendly name lookup for regions not in compute API
+				instance.Regions[rk.region] = getRegionFriendlyName(rk.region)
+			}
 		}
 
 		// Only include instances that have pricing data
@@ -304,24 +343,35 @@ func processGCPData(skus []SKU, pricing map[string]PriceInfo) map[string]*GCPIns
 
 // Main scraping function
 func DoGCPScraping() {
-	apiKey := os.Getenv("GCP_API_KEY")
+	log.Println("Fetching GCP regions from Compute Engine API...")
+	regions, err := fetchRegions()
+	if err != nil {
+		log.Fatal("Failed to fetch regions:", err)
+	}
+
+	log.Println("Fetching GCP machine types from Compute Engine API...")
+	machineSpecs, err := fetchMachineTypes()
+	if err != nil {
+		log.Fatal("Failed to fetch machine types:", err)
+	}
+	log.Printf("Fetched %d GCP machine types", len(machineSpecs))
 
 	log.Println("Fetching GCP Compute Engine SKUs...")
-	skus, err := fetchComputeSKUs(apiKey)
+	skus, err := fetchComputeSKUs()
 	if err != nil {
 		log.Fatal("Failed to fetch SKUs:", err)
 	}
 	log.Printf("Fetched %d GCP SKUs", len(skus))
 
 	log.Println("Fetching GCP pricing data...")
-	pricing, err := fetchPricing(apiKey)
+	pricing, err := fetchPricing()
 	if err != nil {
 		log.Fatal("Failed to fetch pricing:", err)
 	}
 	log.Printf("Fetched pricing for %d GCP SKUs", len(pricing))
 
 	log.Println("Processing GCP instance data...")
-	instancesMap := processGCPData(skus, pricing)
+	instancesMap := processGCPData(skus, pricing, machineSpecs, regions)
 
 	// Convert map to sorted slice
 	instances := make([]*GCPInstance, 0, len(instancesMap))

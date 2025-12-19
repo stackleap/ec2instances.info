@@ -33,10 +33,11 @@ type ec2SkuData struct {
 	instance    *EC2Instance
 	platform    string
 	hasBoxUsage bool
+	region      string
 }
 
 func processEC2Data(
-	inData chan *awsutils.RawRegion,
+	inData chan awsutils.RawRegion,
 	ec2ApiResponses *utils.SlowBuildingMap[string, *types.InstanceTypeInfo],
 	china bool,
 	getters ec2DataGetters,
@@ -55,9 +56,11 @@ func processEC2Data(
 	regionDescriptions := make(map[string]string)
 
 	// Process each region as it comes in
+	var savingsPlanData func() map[string]map[string]map[string]float64
 	for rawRegion := range inData {
 		// Close the channel when we're done
-		if rawRegion == nil {
+		if rawRegion.SavingsPlanData != nil {
+			savingsPlanData = rawRegion.SavingsPlanData
 			close(inData)
 			break
 		}
@@ -120,6 +123,7 @@ func processEC2Data(
 					instance:    instance,
 					platform:    platform,
 					hasBoxUsage: strings.Contains(product.Attributes["usagetype"], "BoxUsage"),
+					region:      rawRegion.RegionName,
 				}
 			}
 
@@ -286,6 +290,37 @@ func processEC2Data(
 
 	// Add VPC only instances
 	addVpcOnlyInstances(instancesHashmap)
+
+	// Add savings plans pricing
+	for region, skuMap := range savingsPlanData() {
+		for sku, termMap := range skuMap {
+			skuInfo, ok := sku2SkuData[sku]
+			if !ok {
+				continue
+			}
+			for term, price := range termMap {
+				regionPricing, ok := skuInfo.instance.Pricing[region]
+				if !ok {
+					regionPricing = make(map[OS]any)
+					skuInfo.instance.Pricing[region] = regionPricing
+				}
+				osPricing, ok := regionPricing[skuInfo.platform]
+				if !ok {
+					osPricing = &EC2PricingData{
+						Reserved: &map[string]string{},
+						OnDemand: "0",
+					}
+					regionPricing[skuInfo.platform] = osPricing
+				}
+				pricingData := osPricing.(*EC2PricingData)
+				if pricingData.Reserved == nil {
+					m := make(map[string]string)
+					pricingData.Reserved = &m
+				}
+				(*pricingData.Reserved)[term] = formatPrice(price)
+			}
+		}
+	}
 
 	// Clean up empty regions and set the regions map for non-empty regions
 	for _, instance := range instancesHashmap {

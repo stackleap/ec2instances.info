@@ -6,7 +6,6 @@ import {
     getFilteredRowModel,
     flexRender,
     Row,
-    ColumnFiltersState,
     getSortedRowModel,
     RowSelectionState,
     ColumnDef,
@@ -50,9 +49,6 @@ interface InstanceTableProps<Instance> {
     ecuRename?: string;
 }
 
-// Hack to stop Tanstack Table from thinking the array changed.
-const emptyColumnFilters: ColumnFiltersState = [];
-
 const regexCache = new Map<string, RegExp>();
 function getRegex(value: string) {
     let regex = regexCache.get(value);
@@ -62,6 +58,21 @@ function getRegex(value: string) {
     }
     regex.lastIndex = 0;
     return regex;
+}
+
+function Cell({ cell }: { cell: any }) {
+    let child: any;
+    if (typeof cell.column.columnDef.cell === "function") {
+        child = cell.column.columnDef.cell(cell.getContext());
+    } else {
+        child = cell.column.columnDef.cell;
+    }
+
+    if (child === null || child === undefined || child === "") {
+        return <td>-</td>;
+    }
+
+    return <td>{child}</td>;
 }
 
 export default function InstanceTable<
@@ -97,6 +108,9 @@ export default function InstanceTable<
             cnyRate: conversionRate.cny,
         },
     );
+    for (const col of columns) {
+        col.sortUndefined = "last";
+    }
 
     const columnVisibility = useMemo(() => {
         // Merge the state with the default values.
@@ -137,8 +151,8 @@ export default function InstanceTable<
         },
         state: {
             columnVisibility,
-            globalFilter: compareOn ? undefined : searchTerm,
-            columnFilters: compareOn ? emptyColumnFilters : columnFilters,
+            globalFilter: searchTerm,
+            columnFilters: columnFilters,
             sorting,
             rowSelection: rowSelectionRemapped,
         },
@@ -303,16 +317,13 @@ export default function InstanceTable<
                                                     })
                                                 }
                                             />
-                                            {header.column.getCanFilter() &&
-                                                !compareOn && (
-                                                    <div className="absolute bottom-2 left-2 right-2">
-                                                        <IndividualColumnFilter
-                                                            column={
-                                                                header.column
-                                                            }
-                                                        />
-                                                    </div>
-                                                )}
+                                            {header.column.getCanFilter() && (
+                                                <div className="absolute bottom-2 left-2 right-2">
+                                                    <IndividualColumnFilter
+                                                        column={header.column}
+                                                    />
+                                                </div>
+                                            )}
                                         </div>
                                     </th>
                                 ))}
@@ -360,12 +371,7 @@ export default function InstanceTable<
                                     }`}
                                 >
                                     {row.getVisibleCells().map((cell) => (
-                                        <td key={cell.id}>
-                                            {flexRender(
-                                                cell.column.columnDef.cell,
-                                                cell.getContext(),
-                                            )}
-                                        </td>
+                                        <Cell key={cell.id} cell={cell} />
                                     ))}
                                     <td>
                                         {/** DO NOT REMOVE! This is essential for blind people to select rows */}

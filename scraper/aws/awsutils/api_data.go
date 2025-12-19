@@ -32,6 +32,44 @@ type RegionData struct {
 }
 
 type RawRegion struct {
+	// SavingsPlanData is set to non-nil when this is done. If nil, this is regular pricing data.
+	// If not, this is the end and the savings plan data is to be processed. The map can be nil.
+	SavingsPlanData func() map[regionSlug]map[sku]map[term]float64
+
 	RegionName string
 	RegionData RegionData
+}
+
+type SavingsPlanProduct struct {
+	SKU        string            `json:"sku"`
+	Attributes map[string]string `json:"attributes"`
+}
+
+type SavingsPlanLeaseContractLength struct {
+	Duration int    `json:"duration"`
+	Unit     string `json:"unit"`
+}
+
+type SavingsPlanDiscountedRate struct {
+	Price    string `json:"price"`
+	Currency string `json:"currency"`
+}
+
+type SavingsPlanRate struct {
+	DiscountedSKU  string                    `json:"discountedSku"`
+	DiscountedRate SavingsPlanDiscountedRate `json:"discountedRate"`
+}
+
+type SavingsPlanTerm struct {
+	SKU                 string                         `json:"sku"`
+	Description         string                         `json:"description"`
+	LeaseContractLength SavingsPlanLeaseContractLength `json:"leaseContractLength"`
+	Rates               []SavingsPlanRate              `json:"rates"`
+}
+
+type RawSavingsPlanRegion struct {
+	Products []SavingsPlanProduct `json:"products"`
+	Terms    struct {
+		SavingsPlan []SavingsPlanTerm `json:"savingsPlan"`
+	} `json:"terms"`
 }
